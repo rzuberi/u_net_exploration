@@ -19,7 +19,7 @@ import torch.nn.functional as F
 from torch.optim import Adam
 import time
 from torch.autograd import Variable
-import cv2
+from sklearn.metrics import roc_curve, roc_auc_score
 
 #Import images
 #Import masks
@@ -70,13 +70,14 @@ def get_data(images,masks,channel=0):
             img_cropped = img[y:y+crop_height, x:x+crop_width]
             mask_cropped = mask[y:y+crop_height, x:x+crop_width]
 
-            #if len(np.unique(mask_cropped)) == 1:
-            #    j -= 1
-            #    continue
+            #Filters out the masks that have only background
+            if len(np.unique(mask_cropped)) == 1:
+                j -= 1
+                continue
             
             #only allow samples where the amount of cells takes over 0.4 of the total image
             unique, counts = np.unique(mask_cropped, return_counts=True)
-            if counts[0]/
+            #while len(counts) < 2 or (counts[1] / (counts[0]+counts[1])) < 0.4:
 
             img_cropped = padding(img_cropped,250,250)
             mask_cropped = padding(mask_cropped,250,250)
@@ -192,8 +193,8 @@ class UNet(Module):
         if self.retainDim:
             map = F.interpolate(map, self.outSize)
         # return the segmentation map
-        map = torch.sigmoid(map)
-        map = torch.where(map>0.5, 1.0, 0)
+        #map = torch.sigmoid(map)
+        #map = torch.where(map>0.5, 1.0, 0)
         #map = map == 1.0
         #print(map)
         return map
@@ -279,7 +280,7 @@ class FocalTverskyLoss(nn.Module):
         super(FocalTverskyLoss, self).__init__()
 
     def forward(self, inputs, targets, alpha=0.7, beta = 0.3, epsilon=1e-6, gamma=3):
-        inputs = torch.where(inputs>0.5, 1.0, 0)
+        #inputs = torch.where(inputs>0.5, 1.0, 0)
 
         inputs = inputs.view(-1)
         targets = targets.view(-1)
@@ -291,7 +292,7 @@ class FocalTverskyLoss(nn.Module):
         Tversky = (TP + epsilon)/(TP + alpha*FP + beta*FN + epsilon)
         tversky_loss = 1 - Tversky
         loss = torch.pow(tversky_loss, 0.75)
-        print(loss)
+        #print(loss)
         return loss
 
 class IoULoss(nn.Module):
@@ -317,6 +318,142 @@ class IoULoss(nn.Module):
                 
         return 1 - IoU
 
+class W_BCEWithLogitsLoss(torch.nn.Module):
+    
+    def __init__(self, w_p = None, w_n = None):
+        super(W_BCEWithLogitsLoss, self).__init__()
+        
+        self.w_p = w_p
+        self.w_n = w_n
+        
+    def forward(self, logits, labels, epsilon = 1e-7):
+        
+        ps = torch.sigmoid(logits.squeeze()) 
+        
+        loss_pos = -1 * torch.mean(self.w_p * labels * torch.log(ps + epsilon))
+        loss_neg = -1 * torch.mean(self.w_n * (1-labels) * torch.log((1-ps) + epsilon))
+        
+        loss = loss_pos + loss_neg
+        
+        return loss
+
+class FocalLoss(torch.nn.Module):
+    def __init__(self, alpha=0.25, gamma=2):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+
+    def forward(self, outputs, targets):
+        BCE_loss = torch.nn.BCEWithLogitsLoss(reduction="none")(outputs, targets)
+        pt = torch.exp(-BCE_loss)
+        Focal_loss = self.alpha * (1-pt)**self.gamma * BCE_loss
+        return Focal_loss.mean()
+
+class WeightedBCELoss(torch.nn.Module):
+    def __init__(self, weight=[80,2]):
+        super().__init__()
+        self.weight = weight
+
+    def forward(self, outputs, targets):
+        BCE_loss = torch.nn.BCEWithLogitsLoss(reduction="none")(outputs, targets)
+        weight = targets * self.weight[1] + (1 - targets) * self.weight[0]
+        weighted_loss = weight * BCE_loss
+        return weighted_loss.mean()
+
+class FocalLoss(torch.nn.Module):
+    def __init__(self, alpha=0.25, gamma=2, weight=[1,100]):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.weight = weight
+
+    def forward(self, outputs, targets):
+        BCE_loss = torch.nn.BCEWithLogitsLoss(reduction="none")(outputs, targets)
+        pt = torch.exp(-BCE_loss)
+        Focal_loss = self.alpha * (1-pt)**self.gamma * BCE_loss
+        return Focal_loss.mean()
+
+class ZeroPenaltyLoss(torch.nn.Module):
+    def __init__(self, penalty_weight=1, reduction='mean'):
+        super().__init__()
+        self.penalty_weight = penalty_weight
+        self.reduction = reduction
+
+    def forward(self, outputs, targets):
+        BCE_loss = torch.nn.BCEWithLogitsLoss(reduction="none")(outputs, targets)
+        zero_penalty = -(targets.sum() - (outputs == 0).sum())
+        total_loss = BCE_loss.mean() + self.penalty_weight * zero_penalty
+        return total_loss
+
+class SimpleDiceLoss(nn.Module):
+    def __init__(self, weight=None, size_average=True):
+        super(SimpleDiceLoss, self).__init__()
+
+    def forward(self,inputs,targets):
+        #flatten label and prediction tensors
+        inputs = inputs.view(-1)
+        targets = targets.view(-1)
+
+        #get weights of pos and neg
+        w_pos = torch.count_nonzero(inputs == 1) / len(inputs)
+        w_neg = torch.count_nonzero(inputs == 0) / len(inputs)
+
+        #difference = (inputs == targets)
+
+        #print(inputs*targets)
+
+        #loss = difference[difference == False and targets == 1]
+        #missed = torch.logical_and(difference == False, targets == 1)
+        #loss = torch.count_nonzero(missed == 1) * w_pos
+        #print(loss)
+
+        #print(difference)
+        numerator = 2*torch.sum(inputs*targets)
+        denominator = torch.sum(inputs+targets)
+        dice_loss = (numerator+1)/(denominator+1)
+
+        #if dice_loss == torch.nan:
+        #    print('agagdagd')
+        #print(torch.unique(targets).size(dim=0))
+
+        #if torch.unique(targets).size(dim=0) == 1 and torch.unique(inputs).size(dim=0) == 1:
+            #if torch.unique(targets) == torch.unique(inputs):
+                #dice_loss = 1
+
+        return 1 - dice_loss
+
+class BCEWLLW(nn.Module):
+    def __init__(self, weight=None, size_average=True):
+        super(BCEWLLW, self).__init__()
+
+    def forward(self,inputs,targets):
+        #flatten label and prediction tensors
+        inputs = inputs.view(-1)
+        targets = targets.view(-1)
+
+        #get weights of pos and neg
+        #w_pos = torch.count_nonzero(inputs == 1) / len(inputs)
+        #w_neg = torch.count_nonzero(inputs == 0) / len(inputs)
+
+        pos_weight = torch.count_nonzero(targets == 0) / torch.count_nonzero(targets == 1)
+        print(torch.count_nonzero(targets == 0), torch.count_nonzero(targets == 1))
+
+        #numerator = 2*torch.sum(inputs*targets)
+        #denominator = torch.sum(inputs+targets)
+        #dice_loss = (numerator+1)/(denominator+1)
+
+        #if dice_loss == torch.nan:
+        #    print('agagdagd')
+        #print(torch.unique(targets).size(dim=0))
+
+        #if torch.unique(targets).size(dim=0) == 1 and torch.unique(inputs).size(dim=0) == 1:
+            #if torch.unique(targets) == torch.unique(inputs):
+                #dice_loss = 1
+        print(pos_weight)
+        BCE = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)(inputs,targets)
+        print(BCE)
+        return BCE
+
 def train_network(trainLoader, testLoader,NUM_EPOCHS=10):
     DEVICE = "mps"
     unet = UNet().to(DEVICE)
@@ -325,8 +462,18 @@ def train_network(trainLoader, testLoader,NUM_EPOCHS=10):
     #lossFunc = FocalLoss(gamma=2)
     #lossFunc = FocalLoss_X()
     #lossFunc = FocalTverskyLoss()
-    lossFunc = IoULoss()
-    opt = Adam(unet.parameters(), lr=0.00001)
+    #lossFunc = IoULoss()
+    #lossFunc = W_BCEWithLogitsLoss()
+    #lossFunc = torch.nn.BCEWithLogitsLoss(weight=None, size_average=None, reduce=None, reduction='mean', pos_weight=torch.tensor(0.8))
+    #lossFunc = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor(4.))
+    #lossFunc = focal_loss()
+    #lossFunc = FocalLoss()
+    #lossFunc = WeightedBCELoss()
+    #lossFunc = FocalLoss()
+    #lossFunc = ZeroPenaltyLoss()
+    #lossFunc = SimpleDiceLoss()
+    lossFunc = BCEWLLW()
+    opt = Adam(unet.parameters(), lr=0.0000001)
     trainSteps = len(trainDS)
     testSteps = len(testDS)
     H = {"train_loss": [], "test_loss": []}
@@ -355,7 +502,9 @@ def train_network(trainLoader, testLoader,NUM_EPOCHS=10):
             x = x.float()
             #print(x.shape)
             pred = unet(x)
+
             loss = lossFunc(pred, y)
+
             # first, zero out any previously accumulated gradients, then
             # perform backpropagation, and then update model parameters
             opt.zero_grad()
@@ -377,7 +526,9 @@ def train_network(trainLoader, testLoader,NUM_EPOCHS=10):
                 # make the predictions and calculate the validation loss
                 
                 pred = unet(x)
+
                 totalTestLoss += lossFunc(pred, y)
+               
         # calculate the average training and validation loss
         avgTrainLoss = totalTrainLoss / trainSteps
         avgTestLoss = totalTestLoss / testSteps
@@ -425,8 +576,21 @@ def test_unet(unet, images, masks):
 
         plt.subplot(1,3,2)
         predMask = predMask.detach().cpu().numpy()
+        print(np.unique(predMask))
+
+        sigmoided = torch.sigmoid(torch.tensor(predMask))
+        print('sigmoid:',np.unique(sigmoided))
+        
+        softmaxed = F.softmax(torch.tensor(predMask))
+        print('softmax:',np.unique(softmaxed))
+
+        #predMask = np.where(predMask>0.5, 1.0, 0)
+        #predMask = torch.sigmoid(torch.tensor(predMask))
+        #predMask = F.softmax(torch.tensor(predMask))
         #print(np.unique(predMask))
-        predMask[predMask < 0.5] = 0
+        #predMask = np.where(predMask<0.5, 1.0, 0)
+        #print(np.unique(predMask))
+
         #print(np.unique(predMask))
         #predMask = np.moveaxis(predMask,0,-1)
         #print(predMask.shape)
@@ -469,7 +633,7 @@ if __name__ == '__main__':
     
     #print(X_train[0].shape)
 
-    unet = train_network(trainLoader, testLoader, NUM_EPOCHS=30)
+    unet = train_network(trainLoader, testLoader, NUM_EPOCHS=5)
 
     test_unet(unet, X_test, y_test)
 
