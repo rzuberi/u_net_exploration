@@ -19,7 +19,8 @@ import torch.nn.functional as F
 from torch.optim import Adam
 import time
 from torch.autograd import Variable
-from sklearn.metrics import roc_curve, roc_auc_score
+from cellpose import models
+from cellpose import core
 
 #Import images
 #Import masks
@@ -45,12 +46,18 @@ def padding(array, xx, yy):
 #Function to prepare data for U-Net
 #Input: images and masks
 #Output: training and testing data
-def get_data(images,masks,channel=0):
+def get_data(images,masks,channel=0,flows=False):
     imgs = [image[:,:,channel] for image in images] #only keep first channel
     imgs = [(image-np.min(image))/(np.max(image)-np.min(image)) for image in imgs] #normalise between 1 and 0 with min-max values
 
     #binarise masks
-    mks = [(mask > 0) * 1 for mask in masks] #binarise masks
+    if flows == False:
+        mks = [(mask > 0) * 1 for mask in masks] #binarise masks
+    else:
+        model = models.CellposeModel(model_type='nuclei',gpu=core.use_gpu())
+        masks, flows, styles = model.eval(images,channels=[[0,0]],cellprob_threshold=False)
+        mks = np.array([flows[0][2]]) #works because for now we are only using 1 image!!!!
+        print(mks.shape)
 
     #make random crops with them
     imgs_aug = []
@@ -436,7 +443,7 @@ class BCEWLLW(nn.Module):
         #w_neg = torch.count_nonzero(inputs == 0) / len(inputs)
 
         pos_weight = torch.count_nonzero(targets == 0) / torch.count_nonzero(targets == 1)
-        print(torch.count_nonzero(targets == 0), torch.count_nonzero(targets == 1))
+        #print(torch.count_nonzero(targets == 0), torch.count_nonzero(targets == 1))
 
         #numerator = 2*torch.sum(inputs*targets)
         #denominator = torch.sum(inputs+targets)
@@ -449,13 +456,14 @@ class BCEWLLW(nn.Module):
         #if torch.unique(targets).size(dim=0) == 1 and torch.unique(inputs).size(dim=0) == 1:
             #if torch.unique(targets) == torch.unique(inputs):
                 #dice_loss = 1
-        print(pos_weight)
+        #print(pos_weight)
         BCE = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)(inputs,targets)
-        print(BCE)
+        #print(BCE)
         return BCE
 
 def train_network(trainLoader, testLoader,NUM_EPOCHS=10):
-    DEVICE = "mps"
+    #DEVICE = "mps"
+    DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     unet = UNet().to(DEVICE)
     #lossFunc = DiceLoss()
     #lossFunc = BinSegLoss()
@@ -497,7 +505,8 @@ def train_network(trainLoader, testLoader,NUM_EPOCHS=10):
             # send the input to the device
             x, y = next(iter(training_loader_iter))
             x,y=x.type(torch.float32),y.type(torch.float32)
-            (x, y) = (x.to("mps"), y.to("mps"))
+            #(x, y) = (x.to("mps"), y.to("mps"))
+            (x,y) = (x.to(DEVICE), y.to(DEVICE))
             # perform a forward pass and calculate the training loss
             x = x.float()
             #print(x.shape)
@@ -522,7 +531,8 @@ def train_network(trainLoader, testLoader,NUM_EPOCHS=10):
             for (x, y) in testLoader:
                 # send the input to the device
                 x,y=x.type(torch.float32),y.type(torch.float32)
-                (x, y) = (x.to("mps"), y.to("mps"))
+                #(x, y) = (x.to("mps"), y.to("mps"))
+                (x,y) = (x.to(DEVICE), y.to(DEVICE))
                 # make the predictions and calculate the validation loss
                 
                 pred = unet(x)
@@ -533,14 +543,21 @@ def train_network(trainLoader, testLoader,NUM_EPOCHS=10):
         avgTrainLoss = totalTrainLoss / trainSteps
         avgTestLoss = totalTestLoss / testSteps
         # update our training history
+
         #avgTrainLoss = avgTrainLoss.item()
         #avgTrainLoss.detach().to('cpu').numpy()[0]
-        H["train_loss"].append(avgTrainLoss.item())
-        H["test_loss"].append(avgTestLoss.item())
+        #H["train_loss"].append(avgTrainLoss.item())
+        #H["test_loss"].append(avgTestLoss.item())
+        
+        #avgTrainLoss = avgTrainLoss.item()
+        avgTrainLoss.detach().to('cpu').numpy()
+        H["train_loss"].append(avgTrainLoss)
+        H["test_loss"].append(avgTestLoss)
+
         # print the model training and validation information
         print("[INFO] EPOCH: {}/{}".format(e + 1, NUM_EPOCHS))
         print("       Train loss: {:.6f}, Test loss: {:.4f}".format(
-            avgTrainLoss, avgTestLoss))
+            avgTrainLoss.cpu().item(), avgTestLoss.cpu().item()))
     # display the total time needed to perform the training
     endTime = time.time()
     print("[INFO] total time taken to train the model: {:.2f}s".format(
@@ -564,7 +581,8 @@ def test_unet(unet, images, masks):
         image_input = np.moveaxis(image_input,-1,0)
         image_input = torch.from_numpy(image_input)
         image_input = image_input.type(torch.float32)
-        image_input = image_input.to('mps')
+        #image_input = image_input.to('mps')
+        image_input = image_input.to("cuda:0")
         image_input = image_input.float()
         with torch.no_grad():
             predMask = unet(image_input).squeeze()
@@ -609,13 +627,17 @@ def test_unet(unet, images, masks):
 if __name__ == '__main__':
 
     #Checking if PyTorch MPS (for M1) is activated
-    print('PyTorch has MPS activated:',torch.backends.mps.is_built())
+    #print('PyTorch has MPS activated:',torch.backends.mps.is_built())
+    print(torch.cuda.is_available())
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    print(device)
+
 
     images_path = os.getcwd() + '/812_plate/'
     masks_path = os.getcwd() + '/812_plate_masks/'
     images, masks = get_images_masks(images_path, masks_path,num_imgs=1)
 
-    X_train, X_test, y_train, y_test = get_data(images,masks)
+    X_train, X_test, y_train, y_test = get_data(images,masks,flows=True)
 
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     PIN_MEMORY = True if DEVICE == "cuda" else False
@@ -633,7 +655,7 @@ if __name__ == '__main__':
     
     #print(X_train[0].shape)
 
-    unet = train_network(trainLoader, testLoader, NUM_EPOCHS=5)
+    unet = train_network(trainLoader, testLoader, NUM_EPOCHS=20)
 
     test_unet(unet, X_test, y_test)
 
