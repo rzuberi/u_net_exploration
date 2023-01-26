@@ -21,6 +21,7 @@ import time
 from torch.autograd import Variable
 from cellpose import models
 from cellpose import core
+import wandb
 
 #Import images
 #Import masks
@@ -55,8 +56,13 @@ def get_data(images,masks,channel=0,flows=False):
         mks = [(mask > 0) * 1 for mask in masks] #binarise masks
     else:
         model = models.CellposeModel(model_type='nuclei',gpu=core.use_gpu())
-        masks, flows, styles = model.eval(images,channels=[[0,0]],cellprob_threshold=False)
-        mks = np.array([flows[0][2]]) #works because for now we are only using 1 image!!!!
+        masks, flows, styles = model.eval(images,channels=[[0,0]],cellprob_threshold=False,normalize=False)
+        all_flows = np.array([flows[0][2]]) #works because for now we are only using 1 image!!!!
+
+        #I think we should normalise these flows
+        mks = np.array([(mks-np.min(mks))/(np.max(mks)-np.min(mks)) for mks in all_flows])
+
+        print('mks 1:',np.unique(mks[0]))
         print(mks.shape)
 
     #make random crops with them
@@ -65,17 +71,19 @@ def get_data(images,masks,channel=0,flows=False):
     for i in range(len(imgs)):
         img = imgs[i]
         mask = mks[i]
-        for j in range(100):
-            crop_width = random.randint(5,250)
-            crop_height = random.randint(5,250)
-            assert img.shape[0] >= crop_height
-            assert img.shape[1] >= crop_width
+        for j in range(10):
+            #crop_width = random.randint(5,256)
+            #crop_height = random.randint(5,256)
+            #crop_val = random.randint(5,256)
+            crop_val = 100
+            assert img.shape[0] >= crop_val
+            assert img.shape[1] >= crop_val
             assert img.shape[0] == mask.shape[0]
             assert img.shape[1] == mask.shape[1]
-            x = random.randint(0, img.shape[1] - crop_width)
-            y = random.randint(0, img.shape[0] - crop_height)
-            img_cropped = img[y:y+crop_height, x:x+crop_width]
-            mask_cropped = mask[y:y+crop_height, x:x+crop_width]
+            x = random.randint(0, img.shape[1] - crop_val)
+            y = random.randint(0, img.shape[0] - crop_val)
+            img_cropped = img[y:y+crop_val, x:x+crop_val]
+            mask_cropped = mask[y:y+crop_val, x:x+crop_val]
 
             #Filters out the masks that have only background
             if len(np.unique(mask_cropped)) == 1:
@@ -86,11 +94,12 @@ def get_data(images,masks,channel=0,flows=False):
             unique, counts = np.unique(mask_cropped, return_counts=True)
             #while len(counts) < 2 or (counts[1] / (counts[0]+counts[1])) < 0.4:
 
-            img_cropped = padding(img_cropped,250,250)
-            mask_cropped = padding(mask_cropped,250,250)
+            img_cropped = padding(img_cropped,256,256)
+            mask_cropped = padding(mask_cropped,256,256)
 
             img_cropped = np.expand_dims(img_cropped,-1)
             mask_cropped = np.expand_dims(mask_cropped,-1)
+
             img_cropped = np.moveaxis(img_cropped, -1, 0)
             mask_cropped = np.moveaxis(mask_cropped,-1,0)
 
@@ -100,6 +109,10 @@ def get_data(images,masks,channel=0,flows=False):
     #make them torches
     imgs = torch.tensor(np.array(imgs_aug))
     mks = torch.tensor(np.array(mks_aug))
+
+    print('Printing shapes')
+    print(imgs.shape)
+    print(mks.shape)
 
     #return with training and testing split
     X_train, X_test, y_train, y_test = train_test_split(imgs, mks, test_size=0.33, random_state=42)
@@ -142,39 +155,39 @@ class Encoder(Module):
 		return blockOutputs
 
 class Decoder(Module):
-	def __init__(self, channels=(64, 32, 16)):
-		super().__init__()
-		# initialize the number of channels, upsampler blocks, and
-		# decoder blocks
-		self.channels = channels
-		self.upconvs = ModuleList([ConvTranspose2d(channels[i], channels[i + 1], 2, 2)for i in range(len(channels) - 1)])
-		self.dec_blocks = ModuleList([Block(channels[i], channels[i + 1]) for i in range(len(channels) - 1)])
+    def __init__(self, channels=(64, 32, 16)):
+        super().__init__()
+        # initialize the number of channels, upsampler blocks, and
+        # decoder blocks
+        self.channels = channels
+        self.upconvs = ModuleList([ConvTranspose2d(channels[i], channels[i + 1], 2, 2)for i in range(len(channels) - 1)])
+        self.dec_blocks = ModuleList([Block(channels[i], channels[i + 1]) for i in range(len(channels) - 1)])
 
-	def forward(self, x, encFeatures):
-		# loop through the number of channels
-		for i in range(len(self.channels) - 1):
-			# pass the inputs through the upsampler blocks
-			x = self.upconvs[i](x)
-			# crop the current features from the encoder blocks,
-			# concatenate them with the current upsampled features,
-			# and pass the concatenated output through the current
-			# decoder block
-			encFeat = self.crop(encFeatures[i], x)
-			x = torch.cat([x, encFeat], dim=1)
-			x = self.dec_blocks[i](x)
-		# return the final decoder output
-		return x
+    def forward(self, x, encFeatures):
+    # loop through the number of channels
+        for i in range(len(self.channels) - 1):
+            # pass the inputs through the upsampler blocks
+            x = self.upconvs[i](x)
+            # crop the current features from the encoder blocks,
+            # concatenate them with the current upsampled features,
+            # and pass the concatenated output through the current
+            # decoder block
+            encFeat = self.crop(encFeatures[i], x)
+            x = torch.cat([x, encFeat], dim=1)
+            x = self.dec_blocks[i](x)
+            # return the final decoder output
+        return x
 		
-	def crop(self, encFeatures, x):
-		# grab the dimensions of the inputs, and crop the encoder
-		# features to match the dimensions
-		(_, _, H, W) = x.shape
-		encFeatures = CenterCrop([H, W])(encFeatures)
-		# return the cropped features
-		return encFeatures
+    def crop(self, encFeatures, x):
+        # grab the dimensions of the inputs, and crop the encoder
+        # features to match the dimensions
+        (_, _, H, W) = x.shape
+        encFeatures = CenterCrop([H, W])(encFeatures)
+        # return the cropped features
+        return encFeatures
 
 class UNet(Module):
-    def __init__(self, encChannels=(1, 16, 32, 64), decChannels=(64, 32, 16), nbClasses=1, retainDim=True, outSize=(250,  250)):
+    def __init__(self, encChannels=(1, 16, 32, 64), decChannels=(64, 32, 16), nbClasses=1, retainDim=True, outSize=(256, 256)):
         super().__init__()
         # initialize the encoder and decoder
         self.encoder = Encoder(encChannels)
@@ -197,8 +210,13 @@ class UNet(Module):
         map = self.head(decFeatures)
         # check to see if we are retaining the original output
         # dimensions and if so, then resize the output to match them
-        if self.retainDim:
-            map = F.interpolate(map, self.outSize)
+        #print(map.shape)
+        #print('1st',map.shape)
+        if map.shape[1] < 256 and map.shape[2] < 256 and self.retainDim:
+            #print('interpolating')
+            #map = F.interpolate(map, self.outSize)
+            map = F.pad(map, pad=(31, 31, 31, 31), mode='constant', value=0)
+        #print('2nd',map.shape)
         # return the segmentation map
         #map = torch.sigmoid(map)
         #map = torch.where(map>0.5, 1.0, 0)
@@ -474,14 +492,15 @@ def train_network(trainLoader, testLoader,NUM_EPOCHS=10):
     #lossFunc = W_BCEWithLogitsLoss()
     #lossFunc = torch.nn.BCEWithLogitsLoss(weight=None, size_average=None, reduce=None, reduction='mean', pos_weight=torch.tensor(0.8))
     #lossFunc = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor(4.))
+    lossFunc = torch.nn.BCEWithLogitsLoss()
     #lossFunc = focal_loss()
     #lossFunc = FocalLoss()
     #lossFunc = WeightedBCELoss()
     #lossFunc = FocalLoss()
     #lossFunc = ZeroPenaltyLoss()
     #lossFunc = SimpleDiceLoss()
-    lossFunc = BCEWLLW()
-    opt = Adam(unet.parameters(), lr=0.0000001)
+    #lossFunc = BCEWLLW()
+    opt = Adam(unet.parameters(), lr=0.1)
     trainSteps = len(trainDS)
     testSteps = len(testDS)
     H = {"train_loss": [], "test_loss": []}
@@ -501,6 +520,7 @@ def train_network(trainLoader, testLoader,NUM_EPOCHS=10):
         training_loader_iter = iter(trainLoader)
         #print('going throug loop')
         for i in range(len(trainLoader)):
+            unet.train()
             #print(str(i) + '/' + str(len(trainLoader)))
             # send the input to the device
             x, y = next(iter(training_loader_iter))
@@ -511,8 +531,11 @@ def train_network(trainLoader, testLoader,NUM_EPOCHS=10):
             x = x.float()
             #print(x.shape)
             pred = unet(x)
-
+            #print('pred shape',pred.shape)
+            #print('y shape',y.shape)
             loss = lossFunc(pred, y)
+            print('pred shape',pred.shape)
+            print('y shape',y.shape)
 
             # first, zero out any previously accumulated gradients, then
             # perform backpropagation, and then update model parameters
@@ -540,8 +563,8 @@ def train_network(trainLoader, testLoader,NUM_EPOCHS=10):
                 totalTestLoss += lossFunc(pred, y)
                
         # calculate the average training and validation loss
-        avgTrainLoss = totalTrainLoss / trainSteps
-        avgTestLoss = totalTestLoss / testSteps
+        #avgTrainLoss = totalTrainLoss / trainSteps
+        #avgTestLoss = totalTestLoss / testSteps
         # update our training history
 
         #avgTrainLoss = avgTrainLoss.item()
@@ -550,14 +573,14 @@ def train_network(trainLoader, testLoader,NUM_EPOCHS=10):
         #H["test_loss"].append(avgTestLoss.item())
         
         #avgTrainLoss = avgTrainLoss.item()
-        avgTrainLoss.detach().to('cpu').numpy()
-        H["train_loss"].append(avgTrainLoss)
-        H["test_loss"].append(avgTestLoss)
+        #avgTrainLoss.detach().to('cpu').numpy()
+        #H["train_loss"].append(avgTrainLoss)
+        #H["test_loss"].append(avgTestLoss)
 
         # print the model training and validation information
         print("[INFO] EPOCH: {}/{}".format(e + 1, NUM_EPOCHS))
         print("       Train loss: {:.6f}, Test loss: {:.4f}".format(
-            avgTrainLoss.cpu().item(), avgTestLoss.cpu().item()))
+            totalTrainLoss.cpu().item(), totalTestLoss.cpu().item()))
     # display the total time needed to perform the training
     endTime = time.time()
     print("[INFO] total time taken to train the model: {:.2f}s".format(
@@ -598,6 +621,9 @@ def test_unet(unet, images, masks):
 
         sigmoided = torch.sigmoid(torch.tensor(predMask))
         print('sigmoid:',np.unique(sigmoided))
+        #print('sigmoided count 0.5',np.count_nonzero(sigmoided == 0.5))
+        uni, counts = np.unique(sigmoided, return_counts=True)
+        print('sigmoided counts',counts)
         
         softmaxed = F.softmax(torch.tensor(predMask))
         print('softmax:',np.unique(softmaxed))
@@ -626,6 +652,9 @@ def test_unet(unet, images, masks):
 
 if __name__ == '__main__':
 
+    #try to make prediction without training model
+    #look at prediction at epoch 0
+
     #Checking if PyTorch MPS (for M1) is activated
     #print('PyTorch has MPS activated:',torch.backends.mps.is_built())
     print(torch.cuda.is_available())
@@ -645,6 +674,7 @@ if __name__ == '__main__':
 
     trainDS = [(X_train[i],y_train[i]) for i in range(len(X_train))]
     testDS = [(X_test[i],y_test[i]) for i in range(len(X_test))]
+
     trainLoader = DataLoader(trainDS, shuffle=True,
 	                    batch_size=5, pin_memory=PIN_MEMORY,
 	                    num_workers=2)
@@ -655,7 +685,7 @@ if __name__ == '__main__':
     
     #print(X_train[0].shape)
 
-    unet = train_network(trainLoader, testLoader, NUM_EPOCHS=20)
+    unet = train_network(trainLoader, testLoader, NUM_EPOCHS=3)
 
     test_unet(unet, X_test, y_test)
 
