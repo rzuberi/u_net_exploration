@@ -21,7 +21,7 @@ import time
 from torch.autograd import Variable
 from cellpose import models
 from cellpose import core
-import wandb
+#import wandb
 
 #Import images
 #Import masks
@@ -61,6 +61,7 @@ def get_data(images,masks,channel=0,flows=False):
 
         #I think we should normalise these flows
         mks = np.array([(mks-np.min(mks))/(np.max(mks)-np.min(mks)) for mks in all_flows])
+        #mks = all_flows
 
         print('mks 1:',np.unique(mks[0]))
         print(mks.shape)
@@ -71,11 +72,11 @@ def get_data(images,masks,channel=0,flows=False):
     for i in range(len(imgs)):
         img = imgs[i]
         mask = mks[i]
-        for j in range(10):
+        for j in range(100):
             #crop_width = random.randint(5,256)
             #crop_height = random.randint(5,256)
             #crop_val = random.randint(5,256)
-            crop_val = 100
+            crop_val = 256
             assert img.shape[0] >= crop_val
             assert img.shape[1] >= crop_val
             assert img.shape[0] == mask.shape[0]
@@ -93,9 +94,10 @@ def get_data(images,masks,channel=0,flows=False):
             #only allow samples where the amount of cells takes over 0.4 of the total image
             unique, counts = np.unique(mask_cropped, return_counts=True)
             #while len(counts) < 2 or (counts[1] / (counts[0]+counts[1])) < 0.4:
-
-            img_cropped = padding(img_cropped,256,256)
-            mask_cropped = padding(mask_cropped,256,256)
+            
+            #Not padding anymore because all the images are of the same size (128x128)
+            #img_cropped = padding(img_cropped,256,256)
+            #mask_cropped = padding(mask_cropped,256,256)
 
             img_cropped = np.expand_dims(img_cropped,-1)
             mask_cropped = np.expand_dims(mask_cropped,-1)
@@ -124,14 +126,15 @@ def get_data(images,masks,channel=0,flows=False):
 
 class Block(Module):
 	
-	def __init__(self, inChannels, outChannels):
-		super().__init__()
-		self.conv1 = Conv2d(inChannels, outChannels, 4)
-		self.relu = ReLU()
-		self.conv2 = Conv2d(outChannels, outChannels, 4)
+    def __init__(self, inChannels, outChannels):
+        super().__init__()
+        self.conv1 = Conv2d(inChannels, outChannels, 3, padding=1)
+        self.relu = ReLU()
+        self.conv2 = Conv2d(outChannels, outChannels, 3, padding=1)
 
-	def forward(self, x):
-		return self.conv2(self.relu(self.conv1(x))) #CONV->RELU->CONV
+    def forward(self, x):
+        return self.conv2(self.relu(self.conv1(x))) #CONV->RELU->CONV
+
 
 class Encoder(Module):
 
@@ -212,10 +215,10 @@ class UNet(Module):
         # dimensions and if so, then resize the output to match them
         #print(map.shape)
         #print('1st',map.shape)
-        if map.shape[1] < 256 and map.shape[2] < 256 and self.retainDim:
+        #if map.shape[1] < 128 and map.shape[2] < 128 and self.retainDim:
             #print('interpolating')
-            #map = F.interpolate(map, self.outSize)
-            map = F.pad(map, pad=(31, 31, 31, 31), mode='constant', value=0)
+        #    map = F.interpolate(map, self.outSize)
+            #map = F.pad(map, pad=(31, 31, 31, 31), mode='constant', value=0)
         #print('2nd',map.shape)
         # return the segmentation map
         #map = torch.sigmoid(map)
@@ -481,8 +484,10 @@ class BCEWLLW(nn.Module):
 
 def train_network(trainLoader, testLoader,NUM_EPOCHS=10):
     #DEVICE = "mps"
-    DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    DEVICE = torch.device("cuda:0")
     unet = UNet().to(DEVICE)
+    #print('PARAM GRAD CHECK',['None' if param.grad is None else 'Yes' for param in unet.parameters()])
+
     #lossFunc = DiceLoss()
     #lossFunc = BinSegLoss()
     #lossFunc = FocalLoss(gamma=2)
@@ -500,17 +505,23 @@ def train_network(trainLoader, testLoader,NUM_EPOCHS=10):
     #lossFunc = ZeroPenaltyLoss()
     #lossFunc = SimpleDiceLoss()
     #lossFunc = BCEWLLW()
-    opt = Adam(unet.parameters(), lr=0.1)
+    opt = Adam(unet.parameters(), lr=0.001)
+
     trainSteps = len(trainDS)
     testSteps = len(testDS)
     H = {"train_loss": [], "test_loss": []}
 
     print("[INFO] training the network...")
-    device = torch.device(DEVICE)
+    #device = torch.device(DEVICE)
 
     startTime = time.time()
     for e in range(NUM_EPOCHS):
+        #for param in unet.parameters():
+            #print(param.data)
+            #break
+
         # set the model in training mode
+
         unet.train()
         # initialize the total training and validation loss
         totalTrainLoss = 0
@@ -519,32 +530,50 @@ def train_network(trainLoader, testLoader,NUM_EPOCHS=10):
         #print('going through trainLoader')
         training_loader_iter = iter(trainLoader)
         #print('going throug loop')
-        for i in range(len(trainLoader)):
-            unet.train()
+
+        for (i, (x, y)) in enumerate(trainLoader):
+
             #print(str(i) + '/' + str(len(trainLoader)))
             # send the input to the device
-            x, y = next(iter(training_loader_iter))
-            x,y=x.type(torch.float32),y.type(torch.float32)
-            #(x, y) = (x.to("mps"), y.to("mps"))
+            #(x,y)=x.type(torch.float32),y.type(torch.float32)
             (x,y) = (x.to(DEVICE), y.to(DEVICE))
+
+            #(x, y) = (x.to("mps"), y.to("mps"))
+            
             # perform a forward pass and calculate the training loss
-            x = x.float()
+            #x = x.float()
             #print(x.shape)
+
+            
+
             pred = unet(x)
             #print('pred shape',pred.shape)
             #print('y shape',y.shape)
             loss = lossFunc(pred, y)
-            print('pred shape',pred.shape)
-            print('y shape',y.shape)
+            #print('pred shape',pred.shape)
+            #print('y shape',y.shape)
 
             # first, zero out any previously accumulated gradients, then
             # perform backpropagation, and then update model parameters
+
             opt.zero_grad()
-            loss = Variable(loss, requires_grad = True)
+            #loss = Variable(loss, requires_grad = True)
+            #a = list(unet.parameters())[0].clone()
             loss.backward()
+
+            #print('loop')
+            #for param in unet.parameters():
+            #    if param.grad is not None:
+            #        print(param.grad.data.sum())
+            #print('end loop')
+
             opt.step()
+
+            #print(list(unet.parameters())[0].grad)
+
             # add the loss to the total training loss so far
             totalTrainLoss += loss
+            #print('loss here:',loss)
         # switch off autograd
         #print('going through no_grad')
         with torch.no_grad():
@@ -563,8 +592,8 @@ def train_network(trainLoader, testLoader,NUM_EPOCHS=10):
                 totalTestLoss += lossFunc(pred, y)
                
         # calculate the average training and validation loss
-        #avgTrainLoss = totalTrainLoss / trainSteps
-        #avgTestLoss = totalTestLoss / testSteps
+        avgTrainLoss = totalTrainLoss / trainSteps
+        avgTestLoss = totalTestLoss / testSteps
         # update our training history
 
         #avgTrainLoss = avgTrainLoss.item()
@@ -580,7 +609,7 @@ def train_network(trainLoader, testLoader,NUM_EPOCHS=10):
         # print the model training and validation information
         print("[INFO] EPOCH: {}/{}".format(e + 1, NUM_EPOCHS))
         print("       Train loss: {:.6f}, Test loss: {:.4f}".format(
-            totalTrainLoss.cpu().item(), totalTestLoss.cpu().item()))
+            avgTrainLoss.item(), avgTestLoss.item()))
     # display the total time needed to perform the training
     endTime = time.time()
     print("[INFO] total time taken to train the model: {:.2f}s".format(
@@ -610,12 +639,12 @@ def test_unet(unet, images, masks):
         with torch.no_grad():
             predMask = unet(image_input).squeeze()
 
-        plt.subplot(1,3,1)
+        plt.subplot(1,4,1)
         #image = image.detach().cpu().numpy()
         image_tosave = np.moveaxis(image_tosave,0,-1)
         plt.imshow(image_tosave)
 
-        plt.subplot(1,3,2)
+        plt.subplot(1,4,2)
         predMask = predMask.detach().cpu().numpy()
         print(np.unique(predMask))
 
@@ -641,12 +670,17 @@ def test_unet(unet, images, masks):
         #predMask = np.moveaxis(predMask,0,1)
         plt.imshow(predMask)
 
-        plt.subplot(1,3,3)
+        plt.subplot(1,4,3)
         mask = masks[num_img]
         mask = mask.detach().cpu().numpy()
         #print(np.unique(mask))
         mask = np.moveaxis(mask,0,-1)
         plt.imshow(mask)
+        
+        #show the sigmoided prediction with threshold
+        plt.subplot(1,4,4)
+        sig_thresh = np.where(predMask>0.5, 1.0, 0)
+        plt.imshow(sig_thresh)
 
         plt.show()
 
@@ -668,9 +702,8 @@ if __name__ == '__main__':
 
     X_train, X_test, y_train, y_test = get_data(images,masks,flows=True)
 
-    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-    PIN_MEMORY = True if DEVICE == "cuda" else False
-    PIN_MEMORY = False
+    DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    PIN_MEMORY = True
 
     trainDS = [(X_train[i],y_train[i]) for i in range(len(X_train))]
     testDS = [(X_test[i],y_test[i]) for i in range(len(X_test))]
@@ -685,7 +718,10 @@ if __name__ == '__main__':
     
     #print(X_train[0].shape)
 
-    unet = train_network(trainLoader, testLoader, NUM_EPOCHS=3)
+    #unet = UNet().to(DEVICE)
+    #unet.eval()
+
+    unet = train_network(trainLoader, testLoader, NUM_EPOCHS=5)
 
     test_unet(unet, X_test, y_test)
 
