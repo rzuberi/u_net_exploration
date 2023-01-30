@@ -72,7 +72,7 @@ def get_data(images,masks,channel=0,flows=False):
     for i in range(len(imgs)):
         img = imgs[i]
         mask = mks[i]
-        for j in range(100):
+        for j in range(10000):
             #crop_width = random.randint(5,256)
             #crop_height = random.randint(5,256)
             #crop_val = random.randint(5,256)
@@ -608,7 +608,7 @@ def train_network(trainLoader, testLoader,NUM_EPOCHS=10):
 
         # print the model training and validation information
         print("[INFO] EPOCH: {}/{}".format(e + 1, NUM_EPOCHS))
-        print("       Train loss: {:.6f}, Test loss: {:.4f}".format(
+        print("       Train loss: {:.6f}, Test loss: {:.6f}".format(
             avgTrainLoss.item(), avgTestLoss.item()))
     # display the total time needed to perform the training
     endTime = time.time()
@@ -721,7 +721,9 @@ if __name__ == '__main__':
     #unet = UNet().to(DEVICE)
     #unet.eval()
 
-    unet = train_network(trainLoader, testLoader, NUM_EPOCHS=5)
+    unet = train_network(trainLoader, testLoader, NUM_EPOCHS=30)
+
+    torch.save(unet.state_dict(), os.getcwd()+'\\saved_model\\modelone30epochs')
 
     test_unet(unet, X_test, y_test)
 
