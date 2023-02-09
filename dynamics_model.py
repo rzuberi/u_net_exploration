@@ -36,7 +36,7 @@ def get_images_masks(images_path,masks_path,num_imgs=20):
 #Function to prepare data for U-Net
 #Input: images and masks
 #Output: training and testing data
-def get_data(images,masks,channel=0,flows=False):
+def get_data(images,masks,channel=0,flows=False,split=None):
     imgs = [image[:,:,channel] for image in images] #only keep first channel
     imgs = [(image-np.min(image))/(np.max(image)-np.min(image)) for image in imgs] #normalise between 1 and 0 with min-max values
 
@@ -61,7 +61,7 @@ def get_data(images,masks,channel=0,flows=False):
     for i in range(len(imgs)):
         img = imgs[i]
         mask = mks[i]
-        for j in range(100):
+        for j in range(10):
             #crop_width = random.randint(5,256)
             #crop_height = random.randint(5,256)
             #crop_val = random.randint(5,256)
@@ -98,14 +98,19 @@ def get_data(images,masks,channel=0,flows=False):
             mks_aug.append(mask_cropped)
 
     #make them torches
+    
+
+    
+
+    #return with training and testing split
+    if split == False:
+        return imgs_aug, mks_aug
+    
     imgs = torch.tensor(np.array(imgs_aug))
     mks = torch.tensor(np.array(mks_aug))
-
     print('Printing shapes')
     print(imgs.shape)
     print(mks.shape)
-
-    #return with training and testing split
     X_train, X_test, y_train, y_test = train_test_split(imgs, mks, test_size=0.33, random_state=42)
     return X_train, X_test, y_train, y_test
 
