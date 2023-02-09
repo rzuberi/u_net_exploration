@@ -72,7 +72,7 @@ def get_data(images,masks,channel=0,flows=False):
     for i in range(len(imgs)):
         img = imgs[i]
         mask = mks[i]
-        for j in range(10000):
+        for j in range(10):
             #crop_width = random.randint(5,256)
             #crop_height = random.randint(5,256)
             #crop_val = random.randint(5,256)
