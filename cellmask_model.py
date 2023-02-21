@@ -37,7 +37,8 @@ class CellMaskModel():
 
     def train_models(self,num_epochs,learning_rate=0.001):
         self.unet_cp = train_model(self.unet_cp,self.trainLoader_img,self.testLoader_img,learning_rate=learning_rate,num_epochs=num_epochs,device=self.device,loss="mse")
-        self.unet_mask = train_model(self.unet_mask,self.trainLoader_cp,self.testLoader_cp,learning_rate=learning_rate,num_epochs=num_epochs,device=self.device,loss="BCEwithLogits")
+        #self.unet_mask = train_model(self.unet_mask,self.trainLoader_cp,self.testLoader_cp,learning_rate=learning_rate,num_epochs=num_epochs,device=self.device,loss="BCEwithLogits")
+        self.unet_mask = train_model(self.unet_mask,self.trainLoader_cp,self.testLoader_cp,learning_rate=learning_rate,num_epochs=num_epochs,device=self.device,loss="dice")
 
     def eval(self,x):
         #TODO check if images have multiple channels, and remove them
@@ -54,6 +55,7 @@ class CellMaskModel():
             cp_pred = self.unet_cp(x)
             inter_preds.append(cp_pred.cpu().detach().numpy())
             mask_pred = self.unet_mask(cp_pred.to(self.device))
+            #mask_pred = torch.sigmoid(mask_pred)
             mask_tresh = np.where(np.squeeze(mask_pred.cpu().detach().numpy())>0.5,1,0)
             masks.append(mask_tresh)
 
@@ -74,12 +76,12 @@ class CellMaskModel():
         dice_coeffs = []
         for ((x_img,y_img),(x_cp,y_cp)) in zip(self.testLoader_img,self.testLoader_cp):
             (x_img,y_img) = (x_img.type(torch.float32).to(self.device), y_img.type(torch.float32).to(self.device))
-            img_pred = self.unet_cp(x_img)
+            cp_pred = self.unet_cp(x_img)
 
             (x_cp,y_cp) = (x_cp.type(torch.float32).to(self.device), y_cp.type(torch.float32).to(self.device))
-            cp_pred = self.unet_cp(img_pred.to(self.device))
-            
-            mask_tresh = np.where(np.squeeze(cp_pred.cpu().detach().numpy())>0.5,1,0)
+            mask_pred = self.unet_mask(cp_pred.to(self.device))
+            mask_pred = torch.sigmoid(mask_pred)
+            mask_tresh = np.where(np.squeeze(mask_pred.cpu().detach().numpy())>0.5,1,0)
             
             dice = self.dice_coeff(mask_tresh,np.squeeze(y_cp.cpu().detach().numpy()))
             dice_coeffs.append(dice)
