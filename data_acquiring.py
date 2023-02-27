@@ -131,25 +131,29 @@ def get_random_crops(images, masks, cellprobs):
                 continue
             
             #only allow samples where the amount of cells takes over 0.4 of the total image
-            unique, counts = np.unique(mask_cropped, return_counts=True)
+            #unique, counts = np.unique(mask_cropped, return_counts=True)
             #while len(counts) < 2 or (counts[1] / (counts[0]+counts[1])) < 0.4:
             
             #Not padding anymore because all the images are of the same size (128x128)
             #img_cropped = padding(img_cropped,256,256)
             #mask_cropped = padding(mask_cropped,256,256)
+            for i in range(4):
+                img_cropped_exp = np.expand_dims(img_cropped,-1)
+                mask_cropped_exp = np.expand_dims(mask_cropped,-1)
+                cellprob_cropped_exp = np.expand_dims(cellprob_cropped,-1)
 
-            img_cropped = np.expand_dims(img_cropped,-1)
-            mask_cropped = np.expand_dims(mask_cropped,-1)
-            cellprob_cropped = np.expand_dims(cellprob_cropped,-1)
+                img_cropped_exp = np.moveaxis(img_cropped_exp, -1, 0)
+                mask_cropped_exp = np.moveaxis(mask_cropped_exp,-1,0)
+                cellprob_cropped_exp = np.moveaxis(cellprob_cropped_exp,-1,0)
 
-            img_cropped = np.moveaxis(img_cropped, -1, 0)
-            mask_cropped = np.moveaxis(mask_cropped,-1,0)
-            cellprob_cropped = np.moveaxis(cellprob_cropped,-1,0)
+                imgs_aug.append(img_cropped_exp)
+                mks_aug.append(mask_cropped_exp)
+                cellprob_aug.append(cellprob_cropped_exp)
 
-            imgs_aug.append(img_cropped)
-            mks_aug.append(mask_cropped)
-            cellprob_aug.append(cellprob_cropped)
-    
+                img_cropped = np.rot90(img_cropped)
+                mask_cropped = np.rot90(mask_cropped)
+                cellprob_cropped = np.rot90(cellprob_cropped)
+        
     imgs_aug = torch.tensor(imgs_aug)
     mks_aug = torch.tensor(np.array(mks_aug))
     cellprob_aug = torch.tensor(np.array(cellprob_aug))
