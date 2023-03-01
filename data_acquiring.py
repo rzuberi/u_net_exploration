@@ -9,8 +9,10 @@ from torch.utils.data import DataLoader
 #from train_network import train_network
 from u_net import UNet
 
-def import_images(images_path,num_imgs=20):
+def import_images(images_path,normalisation=False,num_imgs=20):
     images = [np.squeeze(tifffile.imread(images_path + str(i) + '.tif')) for i in range(num_imgs)]
+    if normalisation == True:
+        return [(image-np.min(image))/(np.max(image)-np.min(image)) for image in images]
     return images
 
 def get_cellpose_data(images_path, augment=False, learning_rate=0.01):
