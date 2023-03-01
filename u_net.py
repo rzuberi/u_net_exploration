@@ -84,28 +84,8 @@ class UNet(Module):
         self.outSize = outSize
 
     def forward(self, x):
-        # grab the features from the encoder
         x = x.type(torch.float32)
         encFeatures = self.encoder(x)
-        # pass the encoder features through decoder making sure that
-        # their dimensions are suited for concatenation
-        decFeatures = self.decoder(encFeatures[::-1][0],
-            encFeatures[::-1][1:])
-        # pass the decoder features through the regression head to
-        # obtain the segmentation mask
+        decFeatures = self.decoder(encFeatures[::-1][0], encFeatures[::-1][1:])
         map = self.head(decFeatures)
-        # check to see if we are retaining the original output
-        # dimensions and if so, then resize the output to match them
-        #print(map.shape)
-        #print('1st',map.shape)
-        #if map.shape[1] < 128 and map.shape[2] < 128 and self.retainDim:
-            #print('interpolating')
-        #    map = F.interpolate(map, self.outSize)
-            #map = F.pad(map, pad=(31, 31, 31, 31), mode='constant', value=0)
-        #print('2nd',map.shape)
-        # return the segmentation map
-        #map = torch.sigmoid(map)
-        #map = torch.where(map>0.5, 1.0, 0)
-        #map = map == 1.0
-        #print(map)
-        return map
+        return encFeatures, map
