@@ -6,6 +6,7 @@ from train_network import train_model
 from statistics import mean
 import os
 import math
+from skimage import measure
 
 class CellMaskModel():
 
@@ -40,32 +41,47 @@ class CellMaskModel():
         #self.unet_mask = train_model(self.unet_mask,self.trainLoader_cp,self.testLoader_cp,learning_rate=learning_rate,num_epochs=num_epochs,device=self.device,loss="BCEwithLogits")
         self.unet_mask = train_model(self.unet_mask,self.trainLoader_cp,self.testLoader_cp,learning_rate=learning_rate,num_epochs=num_epochs,device=self.device,loss="dice")
 
-    def eval(self,x):
+    def eval(self,images,channel=0):
         #TODO check if images have multiple channels, and remove them
-        x, pad_val = self.expand_div_256(x)
-        arrays = self.blockshaped(x,256,256)
+        instance_masks = []
         masks = []
-        inter_preds = []
-        self.unet_cp.eval()
-        self.unet_mask.eval()
+        cps = []
+        encFeats_cps = []
+        encFeats_masks = []
+        for x in images:
+            if len(x.shape) == 3:
+                x = x[:,:,channel]
+            x, pad_val = self.expand_div_256(x)
+            arrays = self.blockshaped(x,256,256)
+            masks_crops = []
+            inter_preds = []
+            self.unet_cp.eval()
+            self.unet_mask.eval()
 
-        for i in range(len(arrays)):
-            x = torch.tensor(np.expand_dims(arrays[i],0)).type(torch.float32).to(self.device)
-            x = torch.unsqueeze(x,0)
-            cp_pred = self.unet_cp(x)
-            inter_preds.append(cp_pred.cpu().detach().numpy())
-            mask_pred = self.unet_mask(cp_pred.to(self.device))
-            #mask_pred = torch.sigmoid(mask_pred)
-            mask_tresh = np.where(np.squeeze(mask_pred.cpu().detach().numpy())>0.5,1,0)
-            masks.append(mask_tresh)
+            for i in range(len(arrays)):
+                x = torch.tensor(np.expand_dims(arrays[i],0)).type(torch.float32).to(self.device)
+                x = torch.unsqueeze(x,0)
+                encFeats_cp, cp_pred = self.unet_cp(x)
+                encFeats_cps.append(encFeats_cp)
+                inter_preds.append(cp_pred.cpu().detach().numpy())
+                encFeats_mask, mask_pred = self.unet_mask(cp_pred.to(self.device))
+                encFeats_masks.append(encFeats_mask)
+                #mask_pred = torch.sigmoid(mask_pred)
+                mask_tresh = np.where(np.squeeze(mask_pred.cpu().detach().numpy())>0.5,1,0)
+                masks_crops.append(mask_tresh)
 
-        cp = self.stack_img(inter_preds)
-        cp = cp[pad_val:-pad_val, pad_val:-pad_val]
+            cp = self.stack_img(inter_preds)
+            cp = cp[pad_val:-pad_val, pad_val:-pad_val]
+            cps.append(cp)
 
-        mask = self.stack_img(masks)
-        mask = mask[pad_val:-pad_val, pad_val:-pad_val]
+            mask = self.stack_img(masks_crops)
+            mask = mask[pad_val:-pad_val, pad_val:-pad_val]
+            masks.append(mask)
+            
+            instance_mask = self.instance_seg(mask)
+            instance_masks.append(instance_mask)
 
-        return mask, cp
+        return instance_masks, masks, cps, encFeats_cps, encFeats_masks
 
     #TODO: make image to predict 
     #TODO: evaluate to reconstruct image
@@ -142,7 +158,10 @@ class CellMaskModel():
         intersection = np.logical_and(im1, im2)
 
         return 2. * intersection.sum() / (im1.sum() + im2.sum())
-            
+
+    def instance_seg(self,binary_mask):
+        return measure.label(binary_mask, background=0,connectivity=1)
+
 def dice_evaluate(CellMaskModel):
     CellMaskModel.unet_cp.eval()
     CellMaskModel.unet_mask.eval()
