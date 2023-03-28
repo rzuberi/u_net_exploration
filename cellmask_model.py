@@ -31,9 +31,11 @@ class CellMaskModel():
         torch.save(self.unet_cp.state_dict(), first_network_path)
         torch.save(self.unet_mask.state_dict(), second_network_path)
 
-    def get_data(self, images_path):
-        images, masks, cellprobs = get_cellpose_data(images_path, augment=False, learning_rate=0.01)
-        imgs_aug, mks_aug, cellprob_aug = get_random_crops(images[:,:,:,0],masks,cellprobs)
+    def get_data(self, images_path,format='.tif',num_imgs=23):
+        images, masks, cellprobs = get_cellpose_data(images_path, augment=False, learning_rate=0.01,format=format,num_imgs=num_imgs)
+        print('get_data image shape',images.shape)
+        print('get data masks shape',masks.shape)
+        imgs_aug, mks_aug, cellprob_aug = get_random_crops(images,masks,cellprobs)
         self.trainLoader_img, self.testLoader_img, self.trainLoader_cp, self.testLoader_cp = get_data_loaders(imgs_aug, mks_aug, cellprob_aug)
 
     def train_models(self,num_epochs,learning_rate=0.001):
@@ -168,7 +170,7 @@ def dice_evaluate(CellMaskModel):
     dice_coeffs = []
     for ((x_img,y_img),(x_cp,y_cp)) in zip(CellMaskModel.trainLoader_img,CellMaskModel.trainLoader_cp):
         (x_img,y_img) = (x_img.type(torch.float32).to(CellMaskModel.device), y_img.type(torch.float32).to(CellMaskModel.device))
-        img_pred = CellMaskModel.unet_cp(x_img)
+        img_pred = CellMaskModel.unet_cp(x_img)[1]
 
         (x_cp,y_cp) = (x_cp.type(torch.float32).to(CellMaskModel.device), y_cp.type(torch.float32).to(CellMaskModel.device))
         cp_pred = CellMaskModel.unet_cp(img_pred.to(CellMaskModel.device))
