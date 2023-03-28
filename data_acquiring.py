@@ -1,6 +1,6 @@
 import numpy as np
 import tifffile
-from cellpose import models, core
+from cellpose import models, core, io
 import os
 import random
 import torch
@@ -9,18 +9,18 @@ from torch.utils.data import DataLoader
 #from train_network import train_network
 from u_net import UNet
 
-def import_images(images_path,normalisation=False,num_imgs=20):
-    images = [np.squeeze(tifffile.imread(images_path + str(i) + '.tif')) for i in range(num_imgs)]
+def import_images(images_path,normalisation=False,num_imgs=20,format='.tif'):
+    images = [np.squeeze(tifffile.imread(images_path + str(i) + format)) for i in range(num_imgs)]
     if normalisation == True:
         return [(image-np.min(image))/(np.max(image)-np.min(image)) for image in images]
     return images
 
-def get_cellpose_data(images_path, augment=False, learning_rate=0.01):
-    num_imgs = 5
+def get_cellpose_data(images_path, augment=False, learning_rate=0.01,num_imgs=20,format='.tif'):
+    #num_imgs = 5
 
     #Import the images
     print('importing images')
-    images = import_images(images_path,num_imgs=num_imgs)
+    images = import_images(images_path,num_imgs=num_imgs,format=format)
     images = np.array(images)
     images = images
     print(images.shape)
@@ -34,18 +34,45 @@ def get_cellpose_data(images_path, augment=False, learning_rate=0.01):
 
     print('getting data')
 
-    masks, flows, styles = model.eval(images,channels=[[0,0]],cellprob_threshold=False)
 
+    #cellpose_model = models.CellposeModel(model_type='nuclei',gpu=core.use_gpu())
+    ##now we train the model on our data
+    #train_dir='cellpose_train_data'
+    #test_dir='cellpose_test_data'
+    #output = io.load_train_test_data(train_dir,test_dir,mask_filter='_seg.npy')
+    #train_data, train_labels, _, test_data, test_labels, _ = output
+    #cellpose_model.train(train_data, train_labels, 
+    #                        test_data=test_data,
+    #                        test_labels=test_labels,
+    #                        channels=[0,0], 
+    #                        save_path=train_dir, 
+    #                        n_epochs=300,
+    #                        learning_rate=0.1, 
+    #                        weight_decay=0.0001, 
+    #                        nimg_per_epoch=8,
+    #                        model_name='this_new_model')
+    #masks, flows, styles = cellpose_model.eval(images,channels=[[0,0]],cellprob_threshold=False)
+    masks = []
+    flows = []
+    for i in range(len(images)):
+        mask, flow, _ = model.eval(images[i],channels=[[0,0]],cellprob_threshold=False)
+        masks.append(mask)
+        flows.append(flow)
+
+    print('length of mask',len(masks))
+    masks = np.array(masks)
+    print('first shape',masks.shape)
     print('got data')
 
     masks = np.array(masks)
     masks = np.where(masks>0,1,0)
     flows = np.array(flows)
+    print('first shape',flows.shape)
     
 
     #cellprobs = [[0][i][:,:,2] for i in range(num_imgs)]
-    cellprobs = np.array([flows[2][i] for i in range(num_imgs)])
-
+    cellprobs = np.array([flows[i][2] for i in range(num_imgs)])
+    print('second shape',cellprobs.shape)
     #each model needs to use the same X_train and y_train, we test them on the same data
 
     #First model
@@ -99,11 +126,12 @@ def train_model(images_path, augment=False, learning_rate=0.01):
     return model
 
 def get_random_crops(images, masks, cellprobs):
-
+    print('masks array shape',masks.shape)
     imgs = [(image-np.min(image))/(np.max(image)-np.min(image)) for image in images]
     masks = [(mask-np.min(mask))/(np.max(mask)-np.min(mask)) for mask in masks] #they are already 0 and 1 no need to normalise
     cellprobs = [(cellprob-np.min(cellprob))/(np.max(cellprob)-np.min(cellprob)) for cellprob in cellprobs]
-
+    masks = np.array(masks)
+    print('masks array shape',masks.shape)
     #make random crops with them
     imgs_aug = []
     mks_aug = []
@@ -117,6 +145,8 @@ def get_random_crops(images, masks, cellprobs):
             #crop_height = random.randint(5,256)
             #crop_val = random.randint(5,256)
             crop_val = 256
+            print('imageshape',img.shape)
+            print('maskshape',mask.shape)
             assert img.shape[0] >= crop_val
             assert img.shape[1] >= crop_val
             assert img.shape[0] == mask.shape[0]
