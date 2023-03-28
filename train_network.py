@@ -79,7 +79,10 @@ def train_model(unet, trainLoader, testLoader, num_epochs=10, learning_rate=0.01
             x = x.type(torch.float32)
             y = y.type(torch.float32)
             (x,y) = (x.to(DEVICE), y.to(DEVICE)) # sending the data to the device (cpu or GPU)
-            pred = unet(x) # make a prediction
+            pred = unet(x)[1] # make a prediction
+            #print('pred 1 shape:',len(pred[0]))
+            #print('pred 2 shape:',len(pred[1]))
+            #print('y shape:',y.shape)
             loss = lossFunc(pred, y) # calculate the loss of that prediction
             opt.zero_grad() # zero out the accumulated gradients
             loss.backward() # backpropagate the loss
@@ -94,7 +97,7 @@ def train_model(unet, trainLoader, testLoader, num_epochs=10, learning_rate=0.01
                 x = x.type(torch.float32)
                 y = y.type(torch.float32)
                 (x,y) = (x.to(DEVICE), y.to(DEVICE)) # sending the data to the device (cpu or GPU)
-                pred = unet(x) # make a prediction
+                pred = unet(x)[1] # make a prediction
                 loss = lossFunc(pred, y) # calculate the loss of that prediction
                 test_loss_per_epoch.append(loss.detach().item())
         
